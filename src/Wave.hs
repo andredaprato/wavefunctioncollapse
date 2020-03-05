@@ -1,4 +1,6 @@
+{-# LANGUAGE TypeApplications #-}
 {-# LANGUAGE RecordWildCards #-}
+{-# LANGUAGE StrictData #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE TypeFamilies #-}
 {-# LANGUAGE DeriveGeneric #-}
@@ -7,6 +9,7 @@
 {-# LANGUAGE TemplateHaskell #-}
 module Wave where
 -- import Data.V2
+import System.Random
 import Codec.Picture
 import Debug.Trace
 
@@ -33,6 +36,8 @@ type Entropy = Double
 type Coord = (Int, Int)
 type Direction = (Int,Int)
 type Wave a = M.Map Coord (Values a)
+  --TODO: we really want this instead
+-- type Wave a = V.Vector (V.Vector (Values a))
 
   
 -- | Find the element with the lowest nonzero entropy 
@@ -45,15 +50,22 @@ type Wave a = M.Map Coord (Values a)
 -- minEntropy :: Entropies -> Maybe Coord
 -- minEntropy q = findMin q >>= Just . key
  -- map on some noise to the entropies and then return coord with min entropy
+debug a = trace (show $ a) a
 
+ -- | gridPos better name 
 coord x y = x + y * tileWidth
-n = 2 :: Int
+n = 5 :: Int
 tileWidth = 2
 tileHeight = 2
 directions :: [ Direction ]
 directions = [(-1, 0),(0, 1),(1, 0),(0,-1)]
+opposite (x,y) = (-x, -y)
 
-calculateEntropy sumWeights sumWeightLogWeights = log sumWeights - sumWeightLogWeights / sumWeights
+
+calculateEntropy :: Int -> Double -> Double
+calculateEntropy sumWeights sumWeightLogWeights
+  | sumWeights <= 0 = 0
+  | otherwise = log (fromIntegral $ sumWeights) - sumWeightLogWeights / (fromIntegral $ sumWeights)
 
 newtype Tile a = Tile (V.Vector a) deriving (Generic, Eq, Ord, Show)
 
@@ -65,7 +77,7 @@ data Values a = Values {
   _entropy :: Entropy
   } deriving (Show)
 data TileVals  = TileVals  {
-  _tileWeight :: Double,
+  _tileWeight :: Int,
   _tileLogWeight :: Double,
   _compat :: M.Map Direction Int,
   _possible :: Bool
@@ -73,74 +85,86 @@ data TileVals  = TileVals  {
 
 data Weights = Weights {
   _numPatterns :: Int,
-  _sumsOfWeights :: Double,
+  _sumsOfWeights :: Int,
   _sumsOfWeightLogWeights :: Double
   } deriving Show
 
 $(makeLenses ''Values)
 $(makeLenses ''Weights)
 $(makeLenses ''TileVals)
-  -- we should generalize the index of this structure to allow for different representations
-  -- of the input
-  -- TODO : think about how to generalize the dimension of the input array, though I doubt this is easy mainly because of verifying valid patterns
--- type Wave a = M.IntMap (Values a)
-  -- | an ordering of maybes such that Just is greater than Nothing
+
+  -- | an ordering of maybes such that Just is less than Nothing
   -- | we could create a newtype for Maybe which has this instance as the default
-justGreater :: Ord a => Maybe a -> Maybe a -> Ordering
-justGreater Nothing (Just _) = LT
-justGreater (Just _) Nothing = GT
-justGreater (Just a) (Just b) = compare a b
-justGreater Nothing Nothing = EQ
+justLess :: Ord a => Maybe a -> Maybe a -> Ordering
+justLess Nothing (Just _) = GT
+justLess (Just _) Nothing = LT
+justLess (Just a) (Just b) = compare a b
+justLess Nothing Nothing = EQ
 
 
 
 minEntropy :: Wave a -> Maybe Coord
-minEntropy  = (fmap fst) . minimumBy ent . map checkNumPatterns . M.toList 
+minEntropy  wave =  wave & (fmap fst) . minimumBy ent . map checkNumPatterns . (M.toList) 
   where
-    checkNumPatterns c@(coord, vals) = bool (Just c) Nothing  $
-                                        vals ^. (weights . numPatterns) == 1
+    checkNumPatterns c@(coord, vals) =   bool (Just c) Nothing  $
+                                       vals ^. (weights . numPatterns) == 1
       
-  -- TODO : Nothing will always be less than just so we will return Nothing as soon as one pattern is finalized
     getEnt = (^? _Just . _2 . entropy)
-    ent a b =  justGreater  (getEnt a) (getEnt b)
+    ent a b =  justLess  ( getEnt a) ( getEnt b)
 
--- updateEntropies :: Wave a -> Entropies -> Coord -> Entropies
+  -- TODO: entropies should be updated on every tile ban
 updateEntropies :: Coord -> Wave a -> Wave a 
-updateEntropies coord wave =  wave & (ix coord . entropy) .~ (calculateEntropy sumsOfW sumsOfWLogW) 
+updateEntropies coord wave =  wave & (ix coord . entropy) .~ calculateEntropy sumsOfW sumsOfWLogW
   where sumsOfW = wave ^. (singular $ ix  coord . weights . sumsOfWeights)
         sumsOfWLogW =  wave ^. (singular $ ix  coord . weights . sumsOfWeightLogWeights)
 
 
 banTile :: (Eq a, Ord a)=> Coord -> Tile a -> Wave a ->Wave a
-banTile index tile  wave = newWave
+banTile coord tile  wave =  --debugF (wave ^? ix coord . entropy )
+  updateEntropies coord $  newWave
   where
-    newWave = wave
-      & (ix index . tiles . ix tile . possible ) .~ False
-      & (struct . numPatterns) %~ ( flip (-) 1)
-      & (struct . sumsOfWeights) %~ (\x -> fromMaybe x  ((x-) <$> tileWeights))
+    newWave =  wave
+      & (ix coord . tiles . ix tile . possible ) .~ False
+      & (struct .  numPatterns) %~  (\x -> case x == 1 of
+                                        True -> error "contradiction"
+                                        -- True -> 1
+                                        False -> subtract 1 x)
+      & (struct . sumsOfWeights) %~ (\(x) -> fromMaybe x  ((x-) <$>  tileWeights))
       & (struct . sumsOfWeightLogWeights) %~ (\x -> fromMaybe x ((x-) <$> tileLogWeights))
 
-    struct = ix index . weights 
-    tileWeights =  wave ^? (ix index . tiles . ix tile .  tileWeight) 
-    tileLogWeights = wave ^? (ix index . tiles . ix tile .  tileLogWeight) 
+    struct = ix coord . weights 
+    tileWeights =  wave ^? (ix coord . tiles . ix tile .  tileWeight) 
+    tileLogWeights = wave ^? (ix coord . tiles . ix tile .  tileLogWeight) 
 
 
- -- TODO: make a data structure which holds the number of compatible patterns in each direction
-  -- for  each pixel
 
-compatible :: forall a . (Eq a, Ord a) => Compat a -> Wave a -> Wave a
-compatible propPatterns wave =  foldr (\coord ls -> 
-                                             ls  <> M.foldrWithKey (buildCompatible coord) wave propPatterns)
+-- compatible :: forall a . (Eq a, Ord a) => Compat a -> Wave a -> Wave a
+-- compatible propPatterns wave =  foldl (\ls coord  -> 
+--                                              ls  <> M.foldlWithKey (buildCompatible coord) wave propPatterns)
 
-                          emptyCompat (zip [0..48] [0..48])
+--                           emptyCompat ([(x,y) | x <- [0..14], y <- [0..14]])
+--   where
+--     emptyCompat = M.empty
+--     buildCompatible :: Coord -> Wave a ->  (Tile a, Direction) -> S.Set (Tile a) ->  Wave a
+--   -- we are folding propPatterns at each coordinate and
+--   -- at each coordinate, setting the number of compatible tiles in each direction to the size of the compatible tile set 
+
+--   -- want to update in the opposite direction
+--     buildCompatible coord wave  k v = wave & (ix coord . tiles . (ix $ fst k ) . compat .  (ix $  opposite $ snd k)) .~ (S.size  v)
+                                          -- in debugF (res ^? (ix coord . tiles . (ix $ fst k ) . compat .  (ix $  opposite $ snd k)) ) res
+
+compatible :: forall a . (Eq a, Ord a) => Compat a -> Tile  a -> M.Map Direction Int 
+compatible propPatterns tile = M.foldlWithKey (buildCompatible tile) emptyCompat propPatterns
   where
     emptyCompat = M.empty
-    buildCompatible :: Coord -> (Tile a, Direction) -> S.Set (Tile a) -> Wave a -> Wave a
-    -- this doesn't really do what we want because it wont set it if it's not already there
-    --  kind of want this to be an update though actually because TileVals will already be instantiated
-    --                                                          ^^^ (want this to be `at`)
-    buildCompatible coord k v wave = wave & (ix coord . tiles . (ix $ fst k ) . compat .  (ix $ snd k)) .~ (S.size v)
+    buildCompatible ::  Tile a -> M.Map Direction Int -> (Tile a, Direction) -> S.Set (Tile a) ->  M.Map Direction Int
+  -- we are folding propPatterns at each coordinate and
+  -- at each coordinate, setting the number of compatible tiles in each direction to the size of the compatible tile set 
 
+  -- want to update in the opposite direction
+    buildCompatible tile map  k v = map & (at $  opposite $ snd k) ?~ (S.size  v)
+ 
+debugF f a = trace (show f) a
 
   -- data structure of all compatible patterns
 type Compat a = M.Map (Tile a, Direction) (S.Set (Tile a))
@@ -148,10 +172,10 @@ type Compat a = M.Map (Tile a, Direction) (S.Set (Tile a))
 -- | Generate initial compatibility matrix such that the returned pattern combinations are
 --   compatible at each (dx,dy) offset
 propagatorPatterns :: (Eq a, Ord a) => [Tile a]  -> Compat a
-propagatorPatterns patterns = foldr addPattern compatSet allAgree
+propagatorPatterns patterns = foldl addPattern compatSet allAgree
   where
-    addPattern :: (Eq a, Ord a) => (Tile a, Tile a, Direction) -> Compat a -> Compat a
-    addPattern (p1,p2,i) hMap  = case hMap ^? ix (p1,i) of
+    addPattern :: (Eq a, Ord a) =>Compat a -> (Tile a, Tile a, Direction) ->  Compat a
+    addPattern  hMap (p1,p2,i)  = case hMap ^? ix (p1,i) of
       Nothing -> hMap &  at (p1,i) ?~ S.singleton p2
       Just s  -> hMap &  ix (p1,i) %~ S.insert p2
       
@@ -174,86 +198,101 @@ agrees (Tile p1) (Tile p2) (dx, dy)  =
   in and $ do
     x <-  [xmin..xmax-1] 
     y <-  [ymin..ymax-1]
-    -- pure $ trace ("show x" ++ show x) $ id   x
-    -- return $ p1 V.! coord x y  == p2 V.! coord (x-dx) (y-dy)
-    return $ p1 V.! (coord x y)  == p2 V.! coord (x-dx) (y-dy)
+    -- return $ p1 V.! (debug $ coord x y)  == p2 V.! (debug $ coord (x-dx) (y-dy))
+    return $ p1 V.! coord x y  == p2 V.! coord (x-dx) (y-dy)
 
 
 
-propagate :: (Eq a, Ord a) => Tile a -> Coord -> Compat a -> Wave a -> Wave a
-propagate tile (x1,y1) propagator wave  =
-  foldr  decrementNeighbours wave directions 
+propagate :: (Show a, Eq a, Ord a) => Tile a -> Coord -> Compat a -> Wave a -> Wave a
+propagate tile (x1,y1) propagator wave  = 
+  foldl  decrementNeighbours wave directions 
 
-  where decrementNeighbours d@(dx,dy) hMap =
+  where decrementNeighbours  hMap d@(dx,dy) =
           let x2 = (x1 + dx + n) `mod` n
               y2 = (y1 + dy + n) `mod` n
-              tiles =  propagator ^. (singular  $ ix (tile, d) )
-  -- fold with a possible recursive case, which means we need to fold on the wave
-          in S.foldr (decrementNeighbour d (x2,y2) ) hMap tiles
+  ----------------------------------------------------------------- error here
+              tiles =  case propagator ^? (ix (tile, d) )  of
+                Nothing -> S.empty
+                Just s -> s
+                
+          in S.foldl (decrementNeighbour d (x2,y2) ) hMap tiles
 
-        decrementNeighbour d coord tile wave  =
-          case wave ^? (ix coord.tiles. ix tile . compat . ix d) == Just 1 of
+        decrementNeighbour d coord wave tile   =
+          case  wave ^? (ix coord.tiles. ix tile . compat . ix d) == Just 1 of
 
-            True -> propagate tile coord  propagator $ banTile coord tile $  wave & (ix coord.tiles.ix tile . compat . ix d) %~ (-) 1 
-            False ->  wave & (ix coord.tiles.ix tile . compat . ix d) %~ (-) 1 
+            True -> propagate tile coord  propagator $ banTile coord tile $  wave & (ix coord.tiles.ix tile . compat . ix d) %~ subtract 1 
+            False ->  wave & (ix coord.tiles.ix tile . compat . ix d) %~ subtract 1 
+        waveAt = wave ^? ix (x1,y1).tiles.ix tile . compat 
 
 -- data Quantum a = Collapsed (Wave a) | SuperPos (Wave a)
 data Quantum a b = Collapsed (Wave a) | SuperPos (Wave a) | Result b deriving (Show)
 makePrisms ''Quantum
-collapseWave :: (Eq a, Ord a) => Compat a -> Quantum a (M.Map Coord [Tile a]) -> Quantum  a (M.Map Coord [Tile a])
-collapseWave compat wave =  case wave of
-  Collapsed wave -> Result $ M.map  (\vals -> M.keys $ M.filter (^. possible ) (vals ^. tiles) ) wave
-  SuperPos wave -> case  minEntropy wave of
-                     Nothing -> collapseWave compat (Collapsed wave) 
-                       -- TODO: still need to select a random tile i guess
+-- collapseWave :: (Show a , Eq a, Ord a, RandomGen g) => g ->  Compat a -> Quantum a (M.Map Coord [Tile a]) -> Quantum  a (M.Map Coord [Tile a])
+collapseWave g compat q = go g compat q
+  where go g compat q = case q of
+          Collapsed wave -> Result $ M.map (\vals -> case M.keys $ M.filter ((^. possible) ) (vals ^. tiles)  of
+                                                [] -> [Tile $ V.fromList [PixelRGB8 43 17 0]]
+                                                xs -> xs
+                                            ) wave
+          SuperPos wave -> case minEntropy wave of
+                     Nothing -> collapseWave g compat (Collapsed wave) 
                      Just coord ->
-                       let tile = fst $ head $ M.toList  $ wave ^. (singular $ ix coord . tiles)
-                       in collapseWave compat . SuperPos
+                       -- let tile = fst $ head $ M.toList  $ M.filter ((^. possible)) $  wave ^. (singular $ ix coord . tiles)
+                       let tile =  fst $ randomInList g $ M.toList  $ M.filter ((^. possible)) $  wave ^. (singular $ ix coord . tiles)
+                       -- TODO: still need to select a random tile i guess
+                       in go (snd $ next g) compat . SuperPos
                           $! propagate tile coord compat 
-                          $! updateEntropies coord
+                          -- $! updateEntropies coord
                           $! banTile coord tile wave
-  Result res -> error "nope"
 
+          Result res -> error "nope"
+
+randomInList :: RandomGen g => g -> [a] -> a
+randomInList g list = list !! index
+  where index = fst $ randomR (0, length list - 1) g 
   -- take in a coordinate and a transformation function and return a tile
-readTile :: Pixel a => Image a -> Coord -> (Coord -> Coord) -> Tile a
+readTile :: Show a => Pixel a => Image a -> Coord -> (Coord -> Coord) -> Tile a
 readTile img (x,y) f = Tile . V.fromList $ do
-  
-        dx <- [0..n-1]
-        dy <- [0..n-1]
-        let coord = f $ (x-dx `mod` (imageWidth img) , y-dy `mod` (imageHeight img)) 
-        return $ uncurry  (pixelAt img)  $ coord
+  dx <- [0..n-1]
+  dy <- [0..n-1]
+  let coord = f $ (x-dx `mod` (imageWidth img) , y-dy `mod` (imageHeight img)) 
+  return $  uncurry  ((pixelAt img))  $ coord
 
-wLogW t =  t * log t 
-parseImage :: Image PixelRGB8 -> (Compat PixelRGB8, Quantum PixelRGB8 b)
-parseImage img@Image{..} = (propPatterns, SuperPos wave)
+wLogW t =  (fromIntegral t) * log (fromIntegral t) 
+parseImage ::RandomGen g => g -> Image PixelRGB8 -> (Compat PixelRGB8, Quantum PixelRGB8 b)
+parseImage g img@Image{..}  = (propPatterns, SuperPos wave)
   where
 
-    wave = M.fromList $ zip ([(x,y)  | x <- [0..4], y <-  [0..4]]) $ repeat Values { _entropy = initialEntropy
-                                                                                                      , _tiles = constructTiles
-                                                                                                      , _weights = initialWeights
-                                                                      }
+    wave = M.fromList
+      $ zip ([(x,y)  | x <- [0..imageWidth-1], y <-  [0..imageHeight-1]])
+      $ map   (\x -> Values { _entropy = initialEntropy * (x * 1e-6)
+                            , _tiles = constructTiles
+                            , _weights = initialWeights
+                            })
+                     ((randoms @Double) g )
     
-    initialWeights  = Weights { _numPatterns =  M.size constructTiles
+    initialWeights  = Weights { _numPatterns =  debug $ M.size constructTiles
     -- initialWeights  = Weights { _numPatterns = 2
                               , _sumsOfWeights = sumW
                               , _sumsOfWeightLogWeights = sumWLogW
                               }
-    initialEntropy  = log sumW - sumWLogW / sumW
+    initialEntropy   = calculateEntropy sumW sumWLogW
 
     sumW =  sum $  constructTiles ^.. (folded .  tileWeight)
     sumWLogW = sum  $  constructTiles ^.. (folded . tileWeight . to wLogW )
 
-    constructTiles = foldr addTile M.empty tiles
+    constructTiles = foldl addTile M.empty tiles
 
-    addTile :: Ord a => Tile a -> M.Map (Tile a) TileVals  ->  M.Map (Tile a) TileVals
-    addTile tile tileMap = case tileMap ^? ix tile of
+    -- addTile :: Ord a =>  M.Map (Tile a) TileVals  -> Tile a -> M.Map (Tile a) TileVals
+    addTile tileMap tile  = case tileMap ^? ix tile of
       Nothing -> tileMap & at tile ?~ TileVals { _tileWeight = 1
                                                , _tileLogWeight = 0
-                                               , _compat = M.fromList $ zip directions $ repeat 0
+                                               -- , _compat = M.fromList $ zip directions $ repeat 0
+                                               , _compat = compatible propPatterns tile 
                                                , _possible = True
                                                }
-      Just vals@TileVals{..} ->  tileMap & ix tile %~ \v -> v { _tileWeight = _tileWeight +1
-                                                              , _tileLogWeight = log (_tileWeight + 1) }
+      Just vals@TileVals{..} ->  tileMap & ix tile %~ \v -> v { _tileWeight =  _tileWeight +1
+                                                              , _tileLogWeight = log (fromIntegral _tileWeight + 1) }
 
     propPatterns = propagatorPatterns $  tiles
       
@@ -264,19 +303,11 @@ parseImage img@Image{..} = (propPatterns, SuperPos wave)
           guard $  x - n+1 >= 0 && y - n + 1  >= 0
           return $  readTile img (x,y) id 
 
-   -- for imagewidth and height readtile write it to the set
-   -- then write in waits and start the loopedy loop
 
-
-
-
-  --somehow setting everything to false
-output ::  M.Map Coord [Tile PixelRGB8] -> Image PixelRGB8
-output wave =   generateImage renderWave  5 5 
-  where renderWave x y = V.head $ untile $ head $  wave ^. ((singular $  ix (x,y)) )
-  -- where renderWave x y =  maybe (PixelRGB8 0 0 0) id $  V.head <$> untile <$> head  <$> wave ^? ( ix (x,y) )
-        untile (Tile a ) = a
- -- | gridPos better name 
+untile (Tile a ) = a
+output ::  Coord -> M.Map Coord [Tile PixelRGB8] -> Image PixelRGB8
+output (x,y ) wave =   generateImage  renderWave x y
+  where renderWave x y = V.head $ untile $ head $   wave ^. ((singular $  ix (x,y)) )
         
   
 
@@ -285,12 +316,14 @@ output wave =   generateImage renderWave  5 5
 
 main :: IO ()
 main = do
-  decoder <- readImage "3Bricks.png"
+  -- decoder <- readImage "3Bricks.png"
+  decoder <- readImage "Flowers.png"
+  -- decoder <- readImage "ColoredCity.png"
+  gen <- getStdGen
   let img = convertRGB8 $ fromRight (error "broken") decoder  
-  let collapsed = uncurry collapseWave  (parseImage img)  
-  print $ imageHeight img
-  let out = output $  collapsed ^. (_Result )
-  -- pure ()
+  let collapsed = uncurry (collapseWave gen) (parseImage gen img)  
+  print $ imageHeight img 
+  let out = output (imageWidth img,imageHeight img) $  collapsed ^. (_Result )
   writePng  "output.png"   out 
           -- makePatterns img >>= propagatorPatterns >>= collapseWave 
 

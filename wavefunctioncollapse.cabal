@@ -17,14 +17,14 @@ maintainer:          andre.daprato5@gmail.com
 build-type:          Simple
 extra-source-files:  CHANGELOG.md
 
--- executable wavefunctioncollapse
-library
-  -- main-is:             Main.hs
+executable wavefunctioncollapse
+  main-is:             Main.hs
   hs-source-dirs:      src
   other-modules:      Wave
 
   other-extensions:    GADTs
   build-depends:       base >=4.12 && <4.13
+                     , random
                      , JuicyPixels >= 3.3.4
                      , containers >= 0.6
                      , lens >= 4.18.1

@@ -1,8 +1,9 @@
 module Main where
 
-data This a where
-  This1 :: This Int
+-- data This a where
+--   This1 :: This Int
+import qualified Wave as Wave
   
 
 main :: IO ()
-main = putStrLn "Hello, Haskell!"
+main =  Wave.main
