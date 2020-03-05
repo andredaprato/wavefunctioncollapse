@@ -237,13 +237,12 @@ collapseWave g compat q = go g compat q
           SuperPos wave -> case minEntropy wave of
                      Nothing -> collapseWave g compat (Collapsed wave) 
                      Just coord ->
-                       -- let tile = fst $ head $ M.toList  $ M.filter ((^. possible)) $  wave ^. (singular $ ix coord . tiles)
                        let tile =  fst $ randomInList g $ M.toList  $ M.filter ((^. possible)) $  wave ^. (singular $ ix coord . tiles)
+                           bannees =   M.keys $ M.filterWithKey (\key val -> key /= tile &&  (val ^. possible)) $  wave ^. (singular $ ix coord . tiles)
                        -- TODO: still need to select a random tile i guess
+   -- WE WANT TO BAN EVERY TILE BUT THIS ONE!!!!!
                        in go (snd $ next g) compat . SuperPos
-                          $! propagate tile coord compat 
-                          -- $! updateEntropies coord
-                          $! banTile coord tile wave
+                          $ foldl (\wave tile ->  propagate tile coord compat $ banTile coord tile wave ) wave bannees
 
           Result res -> error "nope"
 
