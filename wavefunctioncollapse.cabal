@@ -5,11 +5,9 @@ cabal-version:       >=1.10
 
 name:                wavefunctioncollapse
 version:             0.1.0.0
--- synopsis:
--- description:
--- bug-reports:
--- license:
-license-file:        LICENSE
+
+-- license:             MIT
+-- license-file:        LICENSE
 author:              Andre Daprato
 maintainer:          andre.daprato5@gmail.com
 -- copyright:
