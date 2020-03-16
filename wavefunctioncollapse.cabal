@@ -20,9 +20,10 @@ extra-source-files:  CHANGELOG.md
 executable wavefunctioncollapse
   main-is:             Main.hs
   hs-source-dirs:      src
-  other-modules:      Wave
+  other-modules:       Wave
+                     , Types
+                     , Image
 
-  other-extensions:    GADTs
   build-depends:       base >=4.12 && <4.13
                      , random
                      , JuicyPixels >= 3.3.4
